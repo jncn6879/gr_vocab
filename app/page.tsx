@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type WordType = "Noun" | "Verb" | "Adjective" | "Phrase" | "Other";
 
@@ -21,12 +21,12 @@ type Direction = "greek" | "english";
 type ReviewSet = "today" | "yesterday" | "missed" | "starred" | "all";
 const STORAGE_KEY = "lexi-greek-vocabulary-cards";
 
-const demoCards: Card[] = [
-  { id: "demo-1", greek: "περίεργος", english: "curious", type: "Adjective", note: "περίεργη, περίεργο", starred: true, learnedDate: todayKey(), wrongCount: 1, correctCount: 3, lastReviewed: null },
-  { id: "demo-2", greek: "θυμάμαι", english: "to remember", type: "Verb", note: "", starred: false, learnedDate: todayKey(), wrongCount: 0, correctCount: 2, lastReviewed: null },
-  { id: "demo-3", greek: "η συνήθεια", english: "the habit", type: "Noun", note: "plural: οι συνήθειες", starred: false, learnedDate: todayKey(), wrongCount: 2, correctCount: 1, lastReviewed: null },
-  { id: "demo-4", greek: "σιγά-σιγά", english: "little by little", type: "Phrase", note: "", starred: true, learnedDate: yesterdayKey(), wrongCount: 3, correctCount: 1, lastReviewed: null },
-];
+type ImportPreview = {
+  cards: Card[];
+  fileName: string;
+  newCount: number;
+  mergeCount: number;
+};
 
 const setLabels: Record<ReviewSet, string> = {
   today: "Today’s words",
@@ -56,11 +56,22 @@ function matchesSet(card: Card, set: ReviewSet) {
   return true;
 }
 
+function cardKey(card: Pick<Card, "greek" | "english" | "type">) {
+  return `${card.greek.trim().toLocaleLowerCase()}|${card.english.trim().toLocaleLowerCase()}|${card.type}`;
+}
+
+function isCard(value: unknown): value is Card {
+  if (!value || typeof value !== "object") return false;
+  const card = value as Record<string, unknown>;
+  return typeof card.id === "string" && typeof card.greek === "string" && typeof card.english === "string"
+    && typeof card.type === "string" && typeof card.note === "string" && typeof card.starred === "boolean"
+    && typeof card.learnedDate === "string" && typeof card.wrongCount === "number"
+    && typeof card.correctCount === "number" && (card.lastReviewed === null || typeof card.lastReviewed === "string");
+}
+
 export default function Home() {
-  const [cards, setCards] = useState<Card[]>(demoCards);
-  const [loading, setLoading] = useState(true);
+  const [cards, setCards] = useState<Card[]>([]);
   const [saving, setSaving] = useState(false);
-  const [offlineDemo, setOfflineDemo] = useState(true);
   const [set, setSet] = useState<ReviewSet>("today");
   const [direction, setDirection] = useState<Direction>("greek");
   const [index, setIndex] = useState(0);
@@ -69,6 +80,10 @@ export default function Home() {
   const [entryMode, setEntryMode] = useState<"single" | "batch">("single");
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importError, setImportError] = useState("");
+  const [transferMessage, setTransferMessage] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [newRows, setNewRows] = useState([{ greek: "", english: "", type: "Noun" as WordType, note: "" }]);
 
   const loadCards = useCallback(() => {
@@ -76,27 +91,25 @@ export default function Home() {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as Card[];
-        if (Array.isArray(parsed) && parsed.length) {
-          setCards(parsed);
-          setOfflineDemo(false);
+        if (Array.isArray(parsed)) {
+          const personalCards = parsed.filter((card) => !card.id.startsWith("demo-"));
+          setCards(personalCards);
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(personalCards));
         }
       }
     } catch {
-      // Keep the friendly starter cards if browser storage is unavailable.
+      // An empty collection is still usable if browser storage is unavailable.
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => { loadCards(); }, [loadCards]);
 
   function remember(nextCards: Card[]) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextCards));
-    setOfflineDemo(false);
   }
 
   const deck = useMemo(() => cards.filter((card) => matchesSet(card, set)), [cards, set]);
   const current = deck.length ? deck[index % deck.length] : null;
-  const todayCount = cards.filter((card) => card.learnedDate === todayKey()).length;
   const masteredCount = cards.filter((card) => card.correctCount >= 3 && card.correctCount > card.wrongCount * 2).length;
   const accuracy = cards.reduce((sum, card) => sum + card.correctCount + card.wrongCount, 0)
     ? Math.round(cards.reduce((sum, card) => sum + card.correctCount, 0) / cards.reduce((sum, card) => sum + card.correctCount + card.wrongCount, 0) * 100)
@@ -129,6 +142,65 @@ export default function Home() {
     remember(updated);
   }
 
+  function exportHistory() {
+    const payload = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), cards }, null, 2);
+    const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `lexi-history-${todayKey()}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setTransferMessage(`${cards.length} card${cards.length === 1 ? "" : "s"} exported.`);
+  }
+
+  async function selectImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setImportError("");
+    setTransferMessage("");
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const incoming = Array.isArray(parsed) ? parsed : (parsed as { cards?: unknown })?.cards;
+      if (!Array.isArray(incoming) || !incoming.every(isCard)) throw new Error("This is not a valid Lexi history file.");
+      const localKeys = new Set(cards.map(cardKey));
+      const incomingCards = incoming.filter((card) => !card.id.startsWith("demo-"));
+      const uniqueIncoming = Array.from(new Map(incomingCards.map((card) => [cardKey(card), card])).values());
+      const mergeCount = uniqueIncoming.filter((card) => localKeys.has(cardKey(card))).length;
+      setImportPreview({ cards: uniqueIncoming, fileName: file.name, newCount: uniqueIncoming.length - mergeCount, mergeCount });
+    } catch (error) {
+      clearImportFile();
+      setImportError(error instanceof Error ? error.message : "The selected file could not be read.");
+    }
+  }
+
+  function clearImportFile() {
+    setImportPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function importHistory() {
+    if (!importPreview) return;
+    const merged = new Map(cards.map((card) => [cardKey(card), card]));
+    for (const incoming of importPreview.cards) {
+      const key = cardKey(incoming);
+      const existing = merged.get(key);
+      merged.set(key, existing ? {
+        ...existing,
+        note: existing.note || incoming.note,
+        starred: existing.starred || incoming.starred,
+        learnedDate: existing.learnedDate < incoming.learnedDate ? existing.learnedDate : incoming.learnedDate,
+        wrongCount: Math.max(existing.wrongCount, incoming.wrongCount),
+        correctCount: Math.max(existing.correctCount, incoming.correctCount),
+        lastReviewed: [existing.lastReviewed, incoming.lastReviewed].filter(Boolean).sort().at(-1) ?? null,
+      } : incoming);
+    }
+    const updated = Array.from(merged.values()).sort((a, b) => b.learnedDate.localeCompare(a.learnedDate));
+    setCards(updated);
+    remember(updated);
+    setTransferMessage(`Import complete — ${importPreview.newCount} new and ${importPreview.mergeCount} matched card${importPreview.mergeCount === 1 ? "" : "s"} added safely.`);
+    clearImportFile();
+  }
+
   function updateRow(rowIndex: number, field: string, value: string) {
     setNewRows((rows) => rows.map((row, i) => i === rowIndex ? { ...row, [field]: value } : row));
   }
@@ -150,7 +222,7 @@ export default function Home() {
       id: crypto.randomUUID(), ...row, greek: row.greek.trim(), english: row.english.trim(), starred: false,
       learnedDate: todayKey(), wrongCount: 0, correctCount: 0, lastReviewed: null,
     }));
-    const updated = [...optimistic, ...cards.filter((card) => !card.id.startsWith("demo-"))];
+    const updated = [...optimistic, ...cards];
     setCards(updated);
     remember(updated);
     setSaving(false);
@@ -187,17 +259,6 @@ export default function Home() {
       </header>
 
       <div className="shell" id="top">
-        <section className="intro">
-          <div>
-            <p className="eyebrow">ΚΑΛΗΜΕΡΑ · GOOD MORNING</p>
-            <h1>Keep your Greek<br/><em>close at hand.</em></h1>
-            <p className="intro-copy">A quiet place to collect new words and make them stick, one card at a time.</p>
-          </div>
-          <div className="day-marker" aria-label="Today’s date"><span>{new Intl.DateTimeFormat("en", { weekday: "short" }).format(new Date()).toUpperCase()}</span><strong>{new Date().getDate()}</strong><small>{new Intl.DateTimeFormat("en", { month: "long" }).format(new Date())}</small></div>
-        </section>
-
-        {offlineDemo && !loading && <div className="demo-note"><span>Starter cards</span> — add your first word to begin your own collection. Your words are saved in this browser.</div>}
-
         <section className="workspace" aria-label="Study workspace">
           <aside className="sidebar">
             <p className="section-label">STUDY SET</p>
@@ -231,6 +292,7 @@ export default function Home() {
                 <button className={`flashcard ${flipped ? "flipped" : ""}`} onClick={() => setFlipped((value) => !value)} aria-label={flipped ? "Hide answer" : "Reveal answer"}>
                   <span className="card-number">{String((index % deck.length) + 1).padStart(2, "0")} / {String(deck.length).padStart(2, "0")}</span>
                   <span className="card-star" onClick={(event) => { event.stopPropagation(); void toggleStar(current); }} role="button" tabIndex={0} aria-label={current.starred ? "Remove favourite" : "Add favourite"}>{current.starred ? "★" : "☆"}</span>
+                  {current.wrongCount > 0 && <span className="missed-badge">Missed {current.wrongCount}×</span>}
                   <span className="word-type">{flipped ? "ANSWER" : current.type.toUpperCase()}</span>
                   <strong lang={direction === "greek" && !flipped || direction === "english" && flipped ? "el" : "en"}>{direction === "greek" ? (flipped ? current.english : current.greek) : (flipped ? current.greek : current.english)}</strong>
                   {flipped && current.note && <span className="word-note">{current.note}</span>}
@@ -238,7 +300,7 @@ export default function Home() {
                 </button>
                 {flipped ? (
                   <div className="answer-actions">
-                    <button className="again" onClick={() => void mark("wrong")}><span>↺</span><b>Again</b><small>Press 1</small></button>
+                    <button className="again" onClick={() => void mark("wrong")}><span>×</span><b>I got it wrong</b><small>Press 1</small></button>
                     <button className="got-it" onClick={() => void mark("correct")}><span>✓</span><b>Got it</b><small>Press 2</small></button>
                   </div>
                 ) : <p className="memory-prompt">Say the answer aloud before revealing it.</p>}
@@ -249,12 +311,6 @@ export default function Home() {
           </section>
         </section>
 
-        <section className="daily-strip">
-          <div><p className="section-label">TODAY’S RHYTHM</p><h2>{todayCount ? `${todayCount} new word${todayCount === 1 ? "" : "s"} added` : "Start today’s collection"}</h2></div>
-          <div className="progress"><span style={{ width: `${Math.min(todayCount / 10 * 100, 100)}%` }} /></div>
-          <p><strong>{todayCount}</strong> / 10 daily goal</p>
-          <button onClick={() => openEntry("single")}>Keep adding <span>→</span></button>
-        </section>
       </div>
 
       {entryOpen && (
@@ -285,9 +341,32 @@ export default function Home() {
         <div className="modal-backdrop" onMouseDown={() => setLibraryOpen(false)}>
           <section className="modal library-modal" onMouseDown={(event) => event.stopPropagation()} aria-modal="true" role="dialog" aria-labelledby="library-title">
             <button className="close-button" onClick={() => setLibraryOpen(false)} aria-label="Close">×</button>
-            <p className="eyebrow">YOUR COLLECTION</p><h2 id="library-title">Word library</h2><p className="modal-copy">Every word you add, together in one place.</p>
+            <p className="eyebrow">YOUR COLLECTION</p><h2 id="library-title">Flashcard library</h2><p className="modal-copy">All your cards in one easy-to-scan list. Missed words are clearly marked for review.</p>
+            <section className="history-tools" aria-label="Move vocabulary history between devices">
+              <div className="history-copy"><strong>Move your history</strong><span>Export everything, then add it to Lexi on another device.</span></div>
+              <div className="history-actions">
+                <button className="secondary-button" onClick={exportHistory} disabled={!cards.length}>↓ Export history</button>
+                <label className="secondary-button file-button">↑ Choose history file<input ref={fileInputRef} type="file" accept="application/json,.json" onChange={selectImportFile} /></label>
+              </div>
+              {importPreview && <div className="import-preview">
+                <div><strong>{importPreview.fileName}</strong><span>{importPreview.newCount} new · {importPreview.mergeCount} already in this browser</span></div>
+                <button className="remove-file" onClick={clearImportFile}>Remove file</button>
+                <button className="save-button" onClick={importHistory}>Add to my history</button>
+              </div>}
+              {importError && <p className="transfer-error">{importError}</p>}
+              {transferMessage && <p className="transfer-success">{transferMessage}</p>}
+              <small>Imports are additive: existing cards stay, new cards are added, and matching cards keep the strongest review history.</small>
+            </section>
             <div className="library-list">
-              {cards.map((card) => <div className="library-row" key={card.id}><button className="library-star" onClick={() => void toggleStar(card)}>{card.starred ? "★" : "☆"}</button><strong lang="el">{card.greek}</strong><span>{card.english}</span><small>{card.type}</small><b className={card.wrongCount > card.correctCount ? "needs-work" : ""}>{card.correctCount} / {card.correctCount + card.wrongCount || "—"}</b></div>)}
+              {cards.length ? cards.map((card) => <article className={`library-card ${card.wrongCount > 0 ? "has-misses" : ""}`} key={card.id}>
+                <div className="library-card-top"><span>{card.type}</span><button className="library-star" onClick={() => void toggleStar(card)} aria-label={card.starred ? "Remove favourite" : "Add favourite"}>{card.starred ? "★" : "☆"}</button></div>
+                <div className="library-card-words"><strong lang="el">{card.greek}</strong><span>{card.english}</span></div>
+                {card.note && <p>{card.note}</p>}
+                <div className="library-card-status">
+                  {card.wrongCount > 0 ? <b className="needs-work">× Missed {card.wrongCount} time{card.wrongCount === 1 ? "" : "s"}</b> : <b className="new-card">Not missed yet</b>}
+                  <span>✓ Correct {card.correctCount} time{card.correctCount === 1 ? "" : "s"}</span>
+                </div>
+              </article>) : <div className="library-empty"><span>λ</span><h3>Your library is empty</h3><p>Add your first word to create a flashcard.</p><button className="add-button" onClick={() => { setLibraryOpen(false); openEntry("single"); }}>Add a word</button></div>}
             </div>
           </section>
         </div>

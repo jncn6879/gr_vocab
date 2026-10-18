@@ -8,6 +8,8 @@ Lexi is a clean, personal Greek vocabulary practice app. Add your own Greek word
 - Study today, yesterday, favourites, difficult cards, or everything
 - Greek-to-English and English-to-Greek recall
 - Correct and missed-answer tracking
+- Flashcard-style library with visible correct and missed history
+- Additive JSON export and import for moving all cards between devices
 - Browser storage that remembers your collection on the current device
 - Responsive desktop and mobile design
 
@@ -31,4 +33,4 @@ Create a production build with `npm run build`.
 
 ## Storage note
 
-GitHub Pages is static hosting, so vocabulary is stored in the browser rather than a cloud database. Words remain after closing the site, but collections do not automatically sync between devices or browsers.
+GitHub Pages is static hosting, so vocabulary is stored in the browser rather than a cloud database. Words remain after closing the site. To move or combine collections, open the Library, export history on one device, and import that file on another. Importing adds new cards and merges matching review history without deleting the cards already in that browser.
