@@ -15,6 +15,9 @@ test("builds a GitHub Pages-ready Lexi app", async () => {
   assert.match(page, /Add to my history/);
   assert.match(page, /Math\.max\(existing\.wrongCount/);
   assert.match(page, /I got it wrong/);
+  assert.match(page, /Save changes/);
+  assert.match(page, /Delete this card permanently/);
+  assert.match(page, /cards\.filter\(\(card\) => card\.id !== id\)/);
   assert.match(workflow, /deploy-pages@v4/);
   await access(new URL("../dist/og.png", import.meta.url));
 });

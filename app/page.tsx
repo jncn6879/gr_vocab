@@ -83,6 +83,9 @@ export default function Home() {
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importError, setImportError] = useState("");
   const [transferMessage, setTransferMessage] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({ greek: "", english: "", type: "Noun" as WordType, note: "" });
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [newRows, setNewRows] = useState([{ greek: "", english: "", type: "Noun" as WordType, note: "" }]);
 
@@ -140,6 +143,36 @@ export default function Home() {
     const updated = cards.map((item) => item.id === card.id ? { ...item, starred: !item.starred } : item);
     setCards(updated);
     remember(updated);
+  }
+
+  function startEditing(card: Card) {
+    setEditingId(card.id);
+    setDeleteConfirmId(null);
+    setEditDraft({ greek: card.greek, english: card.english, type: card.type, note: card.note });
+  }
+
+  function saveEdit(event: FormEvent, id: string) {
+    event.preventDefault();
+    if (!editDraft.greek.trim() || !editDraft.english.trim()) return;
+    const updated = cards.map((card) => card.id === id ? {
+      ...card,
+      greek: editDraft.greek.trim(),
+      english: editDraft.english.trim(),
+      type: editDraft.type,
+      note: editDraft.note.trim(),
+    } : card);
+    setCards(updated);
+    remember(updated);
+    setEditingId(null);
+  }
+
+  function deleteCard(id: string) {
+    const updated = cards.filter((card) => card.id !== id);
+    setCards(updated);
+    remember(updated);
+    setDeleteConfirmId(null);
+    if (editingId === id) setEditingId(null);
+    setIndex(0);
   }
 
   function exportHistory() {
@@ -358,14 +391,24 @@ export default function Home() {
               <small>Imports are additive: existing cards stay, new cards are added, and matching cards keep the strongest review history.</small>
             </section>
             <div className="library-list">
-              {cards.length ? cards.map((card) => <article className={`library-card ${card.wrongCount > 0 ? "has-misses" : ""}`} key={card.id}>
-                <div className="library-card-top"><span>{card.type}</span><button className="library-star" onClick={() => void toggleStar(card)} aria-label={card.starred ? "Remove favourite" : "Add favourite"}>{card.starred ? "★" : "☆"}</button></div>
-                <div className="library-card-words"><strong lang="el">{card.greek}</strong><span>{card.english}</span></div>
-                {card.note && <p>{card.note}</p>}
-                <div className="library-card-status">
-                  {card.wrongCount > 0 ? <b className="needs-work">× Missed {card.wrongCount} time{card.wrongCount === 1 ? "" : "s"}</b> : <b className="new-card">Not missed yet</b>}
-                  <span>✓ Correct {card.correctCount} time{card.correctCount === 1 ? "" : "s"}</span>
-                </div>
+              {cards.length ? cards.map((card) => <article className={`library-card ${card.wrongCount > 0 ? "has-misses" : ""} ${editingId === card.id ? "editing" : ""}`} key={card.id}>
+                {editingId === card.id ? <form className="edit-card-form" onSubmit={(event) => saveEdit(event, card.id)}>
+                  <label>Greek<input lang="el" autoFocus value={editDraft.greek} onChange={(event) => setEditDraft((draft) => ({ ...draft, greek: event.target.value }))} /></label>
+                  <label>English<input value={editDraft.english} onChange={(event) => setEditDraft((draft) => ({ ...draft, english: event.target.value }))} /></label>
+                  <label>Type<select value={editDraft.type} onChange={(event) => setEditDraft((draft) => ({ ...draft, type: event.target.value as WordType }))}>{["Noun", "Verb", "Adjective", "Phrase", "Other"].map((type) => <option key={type}>{type}</option>)}</select></label>
+                  <label className="edit-note">Note<input value={editDraft.note} placeholder="Optional" onChange={(event) => setEditDraft((draft) => ({ ...draft, note: event.target.value }))} /></label>
+                  <div className="edit-actions"><button type="button" className="secondary-button" onClick={() => setEditingId(null)}>Cancel</button><button className="save-button" disabled={!editDraft.greek.trim() || !editDraft.english.trim()}>Save changes</button></div>
+                </form> : <>
+                  <div className="library-card-top"><span>{card.type}</span><button className="library-star" onClick={() => void toggleStar(card)} aria-label={card.starred ? "Remove favourite" : "Add favourite"}>{card.starred ? "★" : "☆"}</button></div>
+                  <div className="library-card-words"><strong lang="el">{card.greek}</strong><span>{card.english}</span></div>
+                  {card.note && <p>{card.note}</p>}
+                  <div className="library-card-status">
+                    {card.wrongCount > 0 ? <b className="needs-work">× Missed {card.wrongCount} time{card.wrongCount === 1 ? "" : "s"}</b> : <b className="new-card">Not missed yet</b>}
+                    <span>✓ Correct {card.correctCount} time{card.correctCount === 1 ? "" : "s"}</span>
+                  </div>
+                  <div className="library-card-actions"><button onClick={() => startEditing(card)}>Edit</button><button className="delete-button" onClick={() => setDeleteConfirmId(card.id)}>Delete</button></div>
+                  {deleteConfirmId === card.id && <div className="delete-confirm"><span>Delete this card permanently?</span><button onClick={() => setDeleteConfirmId(null)}>Cancel</button><button className="confirm-delete" onClick={() => deleteCard(card.id)}>Yes, delete</button></div>}
+                </>}
               </article>) : <div className="library-empty"><span>λ</span><h3>Your library is empty</h3><p>Add your first word to create a flashcard.</p><button className="add-button" onClick={() => { setLibraryOpen(false); openEntry("single"); }}>Add a word</button></div>}
             </div>
           </section>

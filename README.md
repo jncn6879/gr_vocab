@@ -9,6 +9,8 @@ Lexi is a clean, personal Greek vocabulary practice app. Add your own Greek word
 - Greek-to-English and English-to-Greek recall
 - Correct and missed-answer tracking
 - Flashcard-style library with visible correct and missed history
+- Edit card wording, type, or notes without losing review history
+- Delete cards with a confirmation step
 - Additive JSON export and import for moving all cards between devices
 - Browser storage that remembers your collection on the current device
 - Responsive desktop and mobile design
